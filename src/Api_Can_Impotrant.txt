@@ -1,0 +1,226 @@
+import requests
+import json
+from datetime import datetime
+import re
+import time
+
+def OCR(payload2, tenant):
+    attachment_info = json.loads(payload2['attachment'])
+    attachment_url = attachment_info[list(attachment_info.keys())[0]]['url']
+    url = "https://amoga-ocr.cognitiveservices.azure.com/vision/v3.2/read/analyze"
+
+    payload = json.dumps({
+        "url": attachment_url
+    })
+
+    headers = {
+        'Content-Type': 'application/json',
+        'Ocp-Apim-Subscription-Key': '3adf7529613848dbb52eb3b4aa850c22'
+    }
+
+    response = requests.request("POST", url, headers=headers, data=payload)
+    log("Status Code:", response.status_code)
+    log("Headers:", response.headers)
+    operation_location = response.headers.get('Operation-Location')
+    log("Operation Location:", operation_location)
+
+    time.sleep(10)
+
+    result_response = requests.get(operation_location, headers=headers)
+    log("Result Status Code:", result_response.status_code)
+    if result_response.status_code == 200:
+        result_json = result_response.json()
+        text_values = []
+        for page_result in result_json["analyzeResult"]["readResults"]:
+            for line in page_result["lines"]:
+                text_values.append(line["text"])
+        full_text = ' '.join(text_values)
+        string = full_text
+        word = "CIBIL check:"
+        words = string.split() 
+        try:
+            position = words.index(word) + 1  # Add 1 to convert from 0-based index to position
+            print(f"The word '{word}' is found at position {position}.")
+        except ValueError:
+            print(f"The word '{word}' is not found in the string.")
+
+
+        text_dict = {}
+        for i, value in enumerate(text_values):
+            text_dict[f"text{i+1}"] = value
+
+        # Initialize an empty list to store the keys with "Remarks" as value
+        keys_with_remarks = []
+
+        # Print each text value individually only once
+        for key, value in text_dict.items():
+            if value == "CIBIL check:":
+                keys_with_remarks.append(key)
+            print(f"{key}: {value}")
+
+        # Initialize empty dictionaries to store company name and PAN
+        company_Name = {}
+        PAN = {}
+
+        # Increment keys and store in company_Name and PAN dictionaries
+        for index, key in enumerate(keys_with_remarks):
+            company_Name[index] = text_dict[f"text{int(key[4:])+5}"]
+            PAN[index] = text_dict[f"text{int(key[4:])+6}"]
+
+        # Print company_Name and PAN dictionaries
+        print("Company Name:", company_Name)
+        print("PAN:", PAN)
+        # Extract "YantraLive Parts Technology Private Limited" from company_Name dictionary and save it in Industry Name
+        industry_name = company_Name[0]
+
+        # Extract "YantraLive Parts Technology Private Limited" from PAN dictionary and save it in Pan Number
+        pan_number = PAN[0]
+
+        # Print Industry Name and Pan Number
+        print("Industry Name:", industry_name)
+        print("Pan Number:", pan_number)
+
+
+
+        PAN =  pan_number
+        company =  industry_name
+        facility =  text_dict["text13"]
+        log("---?")
+        text3_value = text_dict["text3"]
+        if text3_value.startswith("Date:"):
+            date_value = text3_value.replace("Date:", "").strip()
+            formatted_date = date_value 
+            text_dict["text3"] = formatted_date
+            date_string=text_dict["text3"]
+            parsed_date = datetime.strptime(date_string, "%d-%m-%Y")
+            formatted_date = parsed_date.strftime("%Y-%m-%dT%H:%M:%S.000Z")
+            log(formatted_date)
+        date=text_dict["text3"]
+        facility_options = ["WCDL", "Pre Invoice", "SID", "Purchase Invoice", "WCTL", "Vendor Financing", "Others"]
+        if facility not in facility_options:
+            facility = "Others"
+        patterns = {
+            'UDCs': 'Undated Cheques (PDC)',
+            'statutory compliance': 'Statutory compliance',
+            'net worth certificate': 'Net worth certificate',
+            'change in payee account': 'Letter By Borrower',
+            'RM to do physical meet with the proprietor and share call report.': 'Site visit report',
+            'Crime check & UBO to be done before disbursement.': 'Crime check & UBO',
+            'GSTR3B to be taken':'GSTR-3B',
+            'Annexure': 'RBI Annexure',
+            'MIS including': 'MIS Statement',
+            'Debts Position': 'Debts Position',
+            'Debt Position': 'Debts Position',
+            'Debtors Ageing': 'Debtor Aging',
+            'Debtor Ageing': 'Debtor Aging',
+            'GSTR3B (Returns)': 'GSTR-3B Statement',
+            'Audited Financial': 'Audited Financial Statement',
+        }
+
+        for pattern, name in patterns.items():
+            if pattern in full_text:
+                company_name = name
+                log(name + ": true")
+                create_can(payload2, tenant, PAN, company, date, facility, company_name, formatted_date)
+            else:
+                log(name + ": false")
+        create_case(payload2, tenant, PAN, company, date, facility, formatted_date)
+    else:
+        log("Failed to retrieve results.")
+
+def create_case(payload2, tenant, PAN, company, date, facility, formatted_date):
+    Access_token = tenant.get("access_token")
+    url = "https://credable.amoga.app/api/v2/work/app/6f535cd1-ea56-4bb6-a826-fb94b2d19d7b/data"
+
+    payload = json.dumps({
+      "parentCategory": None,
+      "category": "loanapplcreateborrower",
+      "data": {
+        "loanapplcreateborrower__pancardno": PAN,
+        "loanapplcreateborrower__name": company,
+        "loanapplcreateborrower__borrowercreatedon": formatted_date,
+        "loanapplcreateborrower__typeofborrower": "",
+        "loanapplcreateborrower__typeoffacility": facility,
+        "loanapplcreateborrower__operatingaddress": "",
+        "loanapplcreateborrower__portfoliKWR": "Minal"
+      },
+      "parent_instance_id": "",
+      "workflow_instance_id": None,
+      "notify": True
+    })
+    headers = {
+           "Authorization": "Bearer " + Access_token,
+            "Content-Type": "application/json",
+            }
+
+    response = requests.request("POST", url, headers=headers, data=payload)
+    sendMail()
+    log(response.text)
+
+def create_can(payload2, tenant, PAN, company, date, facility, company_name, formatted_date):
+        if company_name == "RBI Annexure" or company_name == "Audited Financial Statement":
+            frequency = "Once"
+        else:
+            frequency = "Monthly"
+        if frequency == "Once":
+            isrec = "No" 
+        else:
+            isrec = "Yes"
+        Access_token = tenant.get("access_token")
+        url = "https://credable.amoga.app/api/v2/work/app/b32a9747-2be0-4e7b-92d8-6649db22f4ae/data"
+
+        payload = json.dumps({
+          "parentCategory": None,
+          "category": "sdkcomplcompliance",
+          "data": {
+            "sdkcomplcompliance__name": company_name ,
+            "sdkcomplcompliance__pancardno": PAN,
+            "sdkcomplcompliance__borrowername": company,
+            "sdkcomplcompliance__typeofborrower": "Borrower Up",
+            "sdkcomplcompliance__portfoliKWR": "Minal",
+            "sdkcomplcompliance__borrowercreatedon": formatted_date,
+            "sdkcomplcompliance__isrecurrPYS": isrec,
+            "sdkcomplcompliance__typeoffacility": facility,
+            "sdkcomplcompliance__assignee": "amee.vaghela@credable.in",
+            "sdkcomplcompliance__frequencUTI": frequency,
+          },
+          "parent_instance_id": "",
+          "workflow_instance_id": None,
+          "notify": True
+        })
+        headers = {
+                   "Authorization": "Bearer " + Access_token,
+                    "Content-Type": "application/json",
+                    }
+
+        response = requests.request("POST", url, headers=headers, data=payload)
+
+        log(response.text)
+        
+def sendMail():
+    url = "https://credable.amoga.app/api/v1/core/sendmail"
+
+    payload = json.dumps({
+        "email_address": ["harsh.bajpai@amoga.io","kaushikee.agnihotri@amoga.io"],
+        "subject": "Successful Creation of Compliance Documents",
+        "html": "<div><p>I hope this message finds you well. I am writing to inform you that a compliance requirement has been created that necessitates the uploading of specific documents.</p><p>As part of our ongoing efforts to ensure regulatory adherence and organizational compliance, we kindly request your assistance in promptly uploading the required documents to the designated platform.</p><p>Your cooperation in this matter is greatly appreciated and will contribute significantly to our collective commitment to compliance excellence.</p><p>Should you have any questions or require further clarification regarding the document upload process or the compliance requirement itself, please do not hesitate to reach out to me directly.</p><p>Thank you in advance for your attention to this matter.</p><p>Best regards,</p><img width='125' height='24' src ='https://res.cloudinary.com/amoga/image/upload/v1641133686/default/logo.svg'/></div>",
+        "from_email": "support@mail.amoga.io",
+    })
+    headers = {
+        'Content-Type': 'application/json'
+    }
+
+    response = requests.request("POST", url, headers=headers, data=payload)
+    
+    # Log the response
+    log(response.text)
+    log("Mail Sent")
+
+def main(payload, tenant):
+    #return True
+    payload2 = payload
+    OCR(payload2, tenant)
+    log(payload)  #  for info logging
+    log(tenant, "error")  # for other logging : "warn" , "debug"
+    # write your code here
+    
